@@ -1,31 +1,36 @@
+import logging
 import os
 from pathlib import Path
+
 import pyheif
-
-
-import clip
-import pandas as pd
 import torch
 from PIL import Image
-from fire import Fire
-from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model, preprocess = clip.load("ViT-B/32", device=device)
-
-# image_path = '/Users/arrtz3/code/home/PhotoMeta/19700101_030816.jpg'
+from torch.utils.data import Dataset
 
 IMG_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', 'HEIC']
 
 
-def get_list_of_images(folder: str):
+def create_image_list_based_on(folder: str, file_name: str = '../artifacts/image_list.txt') -> list[str]:
+    """"
+    Create a list of images based on a folder
+    :param file_name:
+    :param folder:
+    :return: list[str]
+    """
     image_list = []
     for path, _, files in os.walk(folder):
         for filename in files:
-            if any(filename.endswith(ext) for ext in IMG_EXTENSIONS):
+            if any(filename.lower().endswith(ext) for ext in IMG_EXTENSIONS):
                 image_list.append(os.path.join(path, filename))
-    with open('image_list.txt', 'w') as f:
+    write_list_to_file(image_list, file_name)
+    return image_list
+
+
+def write_list_to_file(image_list, file_name):
+    """"
+    Write a list of images to a file
+    """
+    with open(file_name, 'w') as f:
         for image in image_list:
             f.write(image + '\n')
 
@@ -66,41 +71,23 @@ class CustomDataset(Dataset):
             if self.transform:
                 sample['image'] = self.transform(image)
         except Exception as e:
-            print(e)
-            print(img_name)
+            logging.error(e)
+            logging.error(img_name)
             assert e
 
         return sample
 
 
-def generate_features_for(img_list: str):
-    dataset = CustomDataset(img_list, transform=preprocess)
-    get_features(dataset)
-
-
-def get_features(dataset, batch_size=100):
-    all_features = []
-    all_img_paths = []
-    all_names = []
-
-    with torch.no_grad():
-        for entity in tqdm(DataLoader(dataset, batch_size=batch_size)):
-            images = entity['image'].to(device)
-            names = entity['name']
-            img_paths = entity['img_path']
-            features = model.encode_image(images)
-
-            all_features.append(features)
-            all_names.append(names)
-            all_img_paths.append(img_paths)
-
-    all_names = [item for sublist in all_names for item in sublist]
-    all_img_paths = [item for sublist in all_img_paths for item in sublist]
-    data = dict(names=all_names, features=torch.cat(all_features).cpu().numpy().tolist(), img_paths=all_img_paths)
-    df = pd.DataFrame(data=data)
-    df.to_csv('features.csv', index=False)
-    return df
-
-
-if __name__ == '__main__':
-    Fire(generate_features_for)
+def read_image(img_path) -> Image:
+    """
+    Read an image
+    :param img_path:
+    :return: Image
+    """
+    if img_path.lower().endswith('heic'):
+        heif_file = pyheif.read(img_path)
+        image = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode,
+                                heif_file.stride)
+    else:  # assume "normal" image that pillow can open
+        image = Image.open(img_path)
+    return image
